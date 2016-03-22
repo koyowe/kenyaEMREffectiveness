@@ -254,10 +254,113 @@ order by 1
 -- =============================================================================================================================================================
 --				||| 1.12  % non-pregnant women patients who are on modern contraceptive methods During the review period |||
 -- -------------------------------------------------------------------------------------------------------------------------------------------------------------
+select '1.12' as Indicator, n.cohort_month as period, n.patients_monthly as patients_monthly, n.startDate as startDate,  n.endDate as endDate, n.sixMonthsTotal as num_sixMonthsTotal, d.sixMonthsTotal as denom_sixMonthsTotal
+from
+(
+SELECT date_format(e.encounter_datetime, '%Y-%m') as cohort_month,
+	COUNT(distinct e.patient_id) AS patients_monthly,
+	date_sub(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval 6 MONTH) as startDate,
+	LAST_DAY(e.encounter_datetime) as endDate,
+	(
+		-- 
+		select count(distinct ec.patient_id)
+		from encounter ec
+		join person p on p.person_id = ec.patient_id
+		and p.voided = 0 and ec.voided = 0 
+		and p.gender = 'F' -- female
 
+		join patient pa on pa.patient_id = ec.patient_id
+		and pa.voided = 0
 
+		join obs o on o.person_id = ec.patient_id
+		and o.concept_id in (374,5272) -- family planning, pregnancy
+		and if(o.concept_id=5272, if(o.value_coded =(1066),1,0),0) = 0 -- non-pregnant
+		and o.voided = 0
+		join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
+		left outer join 
+		(
+			select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
+			left(max(concat(tca, visit_date)),10) as tca
+			from (
+			select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
+			date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
+			from obs 
+			where voided =0 and concept_id = 5096
+			group by person_id, date(obs_datetime))x
+			group by person_id 
+		)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
+		left outer join (
+			-- subquery to transfer out and death status
+			select 
+			o.person_id,
+			ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+			ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+			ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+			from obs o
+			where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+			group by person_id
+		) active_status on active_status.person_id =ec.patient_id
+		where ec.encounter_datetime between startDate and endDate
+		and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
+	) as sixMonthsTotal
+from encounter e
+where voided =0
+group by year(e.encounter_datetime), month(e.encounter_datetime) 
+order by year(e.encounter_datetime), month(e.encounter_datetime)
+) d
+join
+(SELECT date_format(e.encounter_datetime, '%Y-%m') as cohort_month,
+	COUNT(distinct e.patient_id) AS patients_monthly,
+	date_sub(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval 6 MONTH) as startDate,
+	LAST_DAY(e.encounter_datetime) as endDate,
+	(
+		-- 
+		select count(distinct ec.patient_id)
+		from encounter ec
+		join person p on p.person_id = ec.patient_id
+		and p.voided = 0 and ec.voided = 0 
+		and p.gender = 'F' -- female
 
+		join patient pa on pa.patient_id = ec.patient_id
+		and pa.voided = 0
 
-
+		join obs o on o.person_id = ec.patient_id
+		and o.concept_id in (374,5272) -- family planning, pregnancy
+		and if(o.concept_id=374, if(o.value_coded not in(5277, 159524, 1107, 1175, 5622),1,0),0) = 1 -- only modern contraceptive
+		and if(o.concept_id=5272, if(o.value_coded =(1066),1,0),0) = 0 -- not pregnant
+		and o.voided = 0
+		join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
+		left outer join 
+		(
+			select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
+			left(max(concat(tca, visit_date)),10) as tca
+			from (
+			select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
+			date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
+			from obs 
+			where voided =0 and concept_id = 5096
+			group by person_id, date(obs_datetime))x
+			group by person_id 
+		)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
+		left outer join (
+			-- subquery to transfer out and death status
+			select 
+			o.person_id,
+			ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+			ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+			ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+			from obs o
+			where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+			group by person_id
+		) active_status on active_status.person_id =ec.patient_id
+		where ec.encounter_datetime between startDate and endDate
+		and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
+	) as sixMonthsTotal
+from encounter e
+where voided =0
+group by year(e.encounter_datetime), month(e.encounter_datetime) 
+order by year(e.encounter_datetime), month(e.encounter_datetime)
+) n on n.cohort_month = d.cohort_month
+order by 1
 -- =============================================================================================================================================================
 -- -------------------------------------------------------------------------------------------------------------------------------------------------------------
