@@ -1,4 +1,58 @@
 -- =================================================================================================================================================
+-- 					||||||| completed query for patients with two or more visits six months a part within  ||||||||||||||||
+--											||||||| within the six months review period  ||||||||||||||||
+-- =================================================================================================================================================
+
+SELECT date_format(e.encounter_datetime, '%Y-%m') as cohort_month,
+	date_sub(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval 6 MONTH) as startDate,
+	LAST_DAY(e.encounter_datetime) as endDate,
+	(
+		select count(distinct ec.patient_id)
+		from (select 
+			@patient_id :=case -- for every group of a given patient's encounters, compare current encounter date to the previous encounter date
+				when (@patient_id = patient_id) and (datediff(date(e.encounter_datetime), @enc_date)) between 85 and 95 then
+					1
+				else 0
+				end as three_m_apart,
+			@patient_id :=patient_id as patient_id, -- cache patient_id
+			@enc_date :=date(e.encounter_datetime) as enc_date, -- cache encounter date
+			e.encounter_datetime, e.voided -- needed for joins & where clause
+		from encounter e) ec
+
+		join patient_program pp on pp.patient_id = ec.patient_id and ec.voided = 0 and pp.voided = 0 and pp.program_id=2
+		left outer join 
+		(
+			select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
+			left(max(concat(tca, visit_date)),10) as tca
+			from (
+			select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
+			date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
+			from obs 
+			where voided =0 and concept_id = 5096
+			group by person_id, date(obs_datetime))x
+			group by person_id 
+		)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
+		left outer join (
+			-- subquery to transfer out and death status
+			select 
+			o.person_id,
+			ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+			ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+			ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+			from obs o
+			where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+			group by person_id
+		) active_status on active_status.person_id =ec.patient_id
+		where ec.encounter_datetime between startDate and endDate
+		and ec.three_m_apart=1 -- two or more encounters satisfy three months apart
+		and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
+	) as sixMonthsTotal
+from encounter e
+where voided =0
+group by year(e.encounter_datetime), month(e.encounter_datetime) 
+order by year(e.encounter_datetime), month(e.encounter_datetime)
+
+-- =================================================================================================================================================
 -- 					||||||| completed report metadata query ||||||||||||||||
 -- =================================================================================================================================================
 select 
