@@ -196,25 +196,40 @@ group by year(e.encounter_datetime), month(e.encounter_datetime)
 -- 		||||||||| Completed query for patients with at least one cd4 result/test within reporting period ||||||||
 -- ======================================================================================================================================================
 select
-	date_add(date_add(LAST_DAY(o.obs_datetime),interval 1 DAY),interval -6 MONTH) as startDate,
-	LAST_DAY(o.obs_datetime) as endDate,
-	date_format(o.obs_datetime, '%Y-%M') as yearMonth,
-	count( distinct o.person_id) as patients,
-	(select sum(x.patients) as total from
-		(select
-		count( distinct o.person_id) as patients,
-		month(o.obs_datetime) as cd4Month,
-		year(o.obs_datetime) as cd4Year,
-		date(o.obs_datetime) as cd4Date,
-		date_format(o.obs_datetime, '%Y-%M') as yearMonth
-		from obs o
-		where o.voided=0 and o.concept_id in (5497, 730)
-	group by year(o.obs_datetime), month(o.obs_datetime)) x
-	where x.cd4Date between startDate and endDate) as sixMonthPeriodPatients
-
+	date_add(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval -6 MONTH) as startDate,
+	LAST_DAY(e.encounter_datetime) as endDate,
+	date_format(e.encounter_datetime, '%Y-%M') as yearMonth,
+	(
+select count(distinct patient) from (
+select distinct
+	o.person_id as patient,
+	o.value_numeric as val,
+	
+	o.obs_datetime as encDate,
+	active_status.date_died as date_died,
+	active_status.to_date as to_date
 from obs o
-where o.voided=0 and o.concept_id in (5497, 730)
-group by year(o.obs_datetime), month(o.obs_datetime)
+left outer join (
+-- subquery to transfer out and death status
+select 
+o.person_id,
+ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+from obs o
+where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+group by person_id
+) active_status on active_status.person_id =o.person_id
+where o.voided=0 and o.concept_id in (5497, 730) 
+group by patient, encDate
+) cd4
+where cd4.encDate between startDate and endDate and (cd4.date_died is null or cd4.date_died='' or cd4.date_died > endDate)
+and (cd4.to_date is null or cd4.to_date='' or cd4.to_date > endDate) -- date_died must be after reporting period
+) as monthTotal
+from encounter e
+where e.voided =0 and e.encounter_datetime between '1980-01-01' and curdate()
+group by year(e.encounter_datetime), month(e.encounter_datetime)
+;
 
 
 
@@ -272,7 +287,7 @@ group by year(e.encounter_datetime), month(e.encounter_datetime)
 
 
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------------
--- 		||||| Current on care/art query			||||||||
+-- 				||||| 			Current on care/art query			||||||||
 -- =========================================================================================================================================================
 SELECT date_format(e.encounter_datetime, '%Y-%m') as cohort_month,
 -- DATE(CONCAT(YEAR(e.encounter_datetime),'-', 1 + 3*(QUARTER(e.encounter_datetime)-1),'-01')) AS quarter_beginning,
@@ -383,7 +398,9 @@ x.encounter_id,
 x.encounter_type,
 x.dob,
 max(x.dateEnrolledInHiv) as dateEnrolledInHiv,
-x.dateEnrolledInTB
+x.dateEnrolledInTB,
+x.date_died,
+x.to_date
 from (
 select distinct
 e.patient_id as patient,
@@ -392,7 +409,9 @@ e.encounter_type,
 e.encounter_id,
 p.birthdate as dob,
 hiv.dateEnrolledInCare as dateEnrolledInHiv,
-tb.dateEnrolledInTB as dateEnrolledInTB
+tb.dateEnrolledInTB as dateEnrolledInTB,
+a_s.date_died as date_died,
+a_s.to_date as to_date
 from encounter e
 inner join (
 select 
@@ -409,23 +428,32 @@ from obs o
 where o.concept_id = 1113 and o.voided=0
 group by 1
 ) tb on tb.person_id=e.patient_id
+left outer join (
+-- subquery to transfer out and death status
+select 
+o.person_id,
+ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+from obs o
+where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+group by person_id
+) a_s on a_s.person_id =e.patient_id
 inner join person p on e.patient_id=p.person_id and p.voided=0
 where e.encounter_type in(3,7) and e.voided=0
 group by e.patient_id, e.encounter_id ) x
--- where x.encDate between '2011-05-15' and '2011-05-30' 
-	 -- and x.dateEnrolledInHiv <= '2011-05-30' 
-	 -- and (x.dateEnrolledInTB is null or x.dateEnrolledInTB <= '2011-05-30')
 group by x.patient,x.encounter_id
 ) m 
 where m.encDate between startDate and endDate 
 	and m.dateEnrolledInHiv <= endDate 
 	and (m.dateEnrolledInTB is null or m.dateEnrolledInTB <= endDate)
 	and (datediff(endDate, dob) / 365.25)>=15 
+	and (m.date_died is null or m.date_died='' or m.date_died > endDate)
+and (m.to_date is null or m.to_date='' or m.to_date > endDate) -- date_died must be after reporting period
 ) as monthlyCount
 from encounter e
 where e.voided =0 and e.encounter_datetime between '1980-01-01' and curdate()
 group by year(e.encounter_datetime), month(e.encounter_datetime)
-;
 
 
 -- =======================================================================================================================================================
@@ -433,26 +461,39 @@ group by year(e.encounter_datetime), month(e.encounter_datetime)
 -- =	===================================================================================================================================================
 -- patients with at least one viral load result in the last 12 months
 select
-	date_add(date_add(LAST_DAY(o.obs_datetime),interval 1 DAY),interval -12 MONTH) as startDate,
-	LAST_DAY(o.obs_datetime) as endDate,
-	date_format(o.obs_datetime, '%Y-%M') as yearMonth,
-	count( distinct o.person_id) as patients,
-	(select sum(x.patients) as total from
-		(select
-		count( distinct o.person_id) as patients,
-		month(o.obs_datetime) as cd4Month,
-		year(o.obs_datetime) as cd4Year,
-		date(o.obs_datetime) as vlDate,
-		date_format(o.obs_datetime, '%Y-%M') as yearMonth
-		from obs o
-		where o.voided=0 and o.concept_id in (856)
-	group by year(o.obs_datetime), month(o.obs_datetime)) x
-	where x.vlDate between startDate and endDate) as sixMonthPeriodPatients
-
+	date_add(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval -1 YEAR) as startDate,
+	LAST_DAY(e.encounter_datetime) as endDate,
+	date_format(e.encounter_datetime, '%Y-%M') as yearMonth,
+	(
+select count(distinct patient) from (
+select distinct
+	o.person_id as patient,
+	o.value_numeric as val,
+	o.obs_datetime as encDate,
+	active_status.date_died as date_died,
+	active_status.to_date as to_date
 from obs o
-where o.voided=0 and o.concept_id in (856)
-group by year(o.obs_datetime), month(o.obs_datetime)
-
+left outer join (
+-- subquery to transfer out and death status
+select 
+o.person_id,
+ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+from obs o
+where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+group by person_id
+) active_status on active_status.person_id =o.person_id
+where o.voided=0 and o.concept_id = 856 
+group by patient, encDate
+) vl
+where vl.encDate between startDate and endDate and (vl.date_died is null or vl.date_died='' or vl.date_died > endDate)
+and (vl.to_date is null or vl.to_date='' or vl.to_date > endDate) -- date_died must be after reporting period
+) as monthTotal
+from encounter e
+where e.voided =0 and e.encounter_datetime between '1980-01-01' and curdate()
+group by year(e.encounter_datetime), month(e.encounter_datetime)
+;
 
 -- ============================================================================================================================================================
                             -- non-pregnant women patients who are on modern contraceptive methods within the six months review period

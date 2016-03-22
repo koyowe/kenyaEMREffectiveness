@@ -73,7 +73,9 @@ x.encounter_id,
 x.encounter_type,
 x.dob,
 max(x.dateEnrolledInHiv) as dateEnrolledInHiv,
-x.dateEnrolledInTB
+x.dateEnrolledInTB,
+x.date_died,
+x.to_date
 from (
 select distinct
 e.patient_id as patient,
@@ -82,7 +84,9 @@ e.encounter_type,
 e.encounter_id,
 p.birthdate as dob,
 hiv.dateEnrolledInCare as dateEnrolledInHiv,
-tb.dateEnrolledInTB as dateEnrolledInTB
+tb.dateEnrolledInTB as dateEnrolledInTB,
+a_s.date_died as date_died,
+a_s.to_date as to_date
 from encounter e
 inner join (
 select 
@@ -99,6 +103,17 @@ from obs o
 where o.concept_id = 1113 and o.voided=0
 group by 1
 ) tb on tb.person_id=e.patient_id
+left outer join (
+-- subquery to transfer out and death status
+select 
+o.person_id,
+ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+from obs o
+where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+group by person_id
+) a_s on a_s.person_id =e.patient_id
 inner join person p on e.patient_id=p.person_id and p.voided=0
 where e.encounter_type in(3,7) and e.voided=0
 group by e.patient_id, e.encounter_id ) x
@@ -108,10 +123,13 @@ where m.encDate between startDate and endDate
 	and m.dateEnrolledInHiv <= endDate 
 	and (m.dateEnrolledInTB is null or m.dateEnrolledInTB <= endDate)
 	and (datediff(endDate, dob) / 365.25)>=15 
+	and (m.date_died is null or m.date_died='' or m.date_died > endDate)
+and (m.to_date is null or m.to_date='' or m.to_date > endDate) -- date_died must be after reporting period
 ) as monthlyCount
 from encounter e
 where e.voided =0 and e.encounter_datetime between '1980-01-01' and curdate()
 group by year(e.encounter_datetime), month(e.encounter_datetime)
+
 ) d
 inner join (
 select
