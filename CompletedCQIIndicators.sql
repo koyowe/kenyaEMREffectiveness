@@ -10,92 +10,91 @@
 select '1.1' as Indicator, d.cohort_month as Period, n.sixMonthsTotal as Numerator, d.ActiveInCareTotal as Denominator
 from
 (
-SELECT date_format(e.encounter_datetime, '%Y-%m') as cohort_month,
--- DATE(CONCAT(YEAR(e.encounter_datetime),'-', 1 + 3*(QUARTER(e.encounter_datetime)-1),'-01')) AS quarter_beginning,
-COUNT(distinct e.patient_id) AS patients_monthly,
-date_sub(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval 6 MONTH) as startDate,
-LAST_DAY(e.encounter_datetime) as endDate,
-(
--- query to get active patients in specified duration
-select count(distinct ec.patient_id)
-from encounter ec 
-join person p on p.person_id = ec.patient_id and p.voided=0 -- and p.dead = 0 -- filter dead
-join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
-left outer join (
-select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
-left(max(concat(tca, visit_date)),10) as tca
-from (
-select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
-date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
-from obs 
-where voided =0 and concept_id = 5096
-group by person_id, date(obs_datetime))x
-group by person_id 
-)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
-left outer join (
--- subquery to transfer out and death status
-select 
-o.person_id,
-ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
-ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
-ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
-from obs o
-where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
-group by person_id
-) active_status on active_status.person_id =ec.patient_id
-where ec.encounter_datetime between startDate and endDate
-and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
- -- and if(datediff(lft.tca, endDate) <= 90, 0,1) = 0
-) as ActiveInCareTotal,
-(
--- query to get active on ART patients in specified duration
-select count(distinct ec.patient_id)
-from encounter ec 
-join person p on p.person_id = ec.patient_id and p.voided=0 -- and p.dead = 0 -- filter dead
-join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
-left outer join (
-select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
-left(max(concat(tca, visit_date)),10) as tca
-from (
-select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
-date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
-from obs 
-where voided =0 and concept_id = 5096
-group by person_id, date(obs_datetime))x
-group by person_id 
-)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
-left outer join (
--- art status
-select patient_id, min(start_date) as start_date
-from (
-select patient_id, group_concat(cn.name) as reg, start_date, discontinued, o.discontinued_reason
-from orders o
-join concept_name cn on cn.concept_id=o.concept_id and cn.voided=0 and cn.concept_name_type='SHORT'
-where o.voided =0
-group by patient_id, date(start_date)
-) art
-group by patient_id
-) art_status on art_status.patient_id = ec.patient_id
-left outer join (
--- subquery to transfer out and death status
-select 
-o.person_id,
-ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
-ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
-ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
-from obs o
-where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
-group by person_id
-) active_status on active_status.person_id =ec.patient_id
-where ec.encounter_datetime between startDate and endDate
-and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
-and if(start_date <= endDate,1,0) =1
-) as ActiveOnARTTotal
-from encounter e
-where voided =0
-group by year(e.encounter_datetime), month(e.encounter_datetime) 
-order by year(e.encounter_datetime), month(e.encounter_datetime) 
-
+	SELECT date_format(e.encounter_datetime, '%Y-%M') as cohort_month,
+		-- DATE(CONCAT(YEAR(e.encounter_datetime),'-', 1 + 3*(QUARTER(e.encounter_datetime)-1),'-01')) AS quarter_beginning,
+		COUNT(distinct e.patient_id) AS patients_monthly,
+		date_sub(date_add(LAST_DAY(e.encounter_datetime),interval 1 DAY),interval 6 MONTH) as startDate,
+		LAST_DAY(e.encounter_datetime) as endDate,
+		(
+			-- query to get active patients in specified duration
+			select count(distinct ec.patient_id)
+			from encounter ec 
+				join person p on p.person_id = ec.patient_id and p.voided=0 -- and p.dead = 0 -- filter dead
+				join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
+				left outer join (
+					select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
+					left(max(concat(tca, visit_date)),10) as tca
+					from (
+					select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
+					date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
+					from obs 
+					where voided =0 and concept_id = 5096
+					group by person_id, date(obs_datetime))x
+					group by person_id 
+				)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
+				left outer join (
+					-- subquery to transfer out and death status
+					select 
+					o.person_id,
+					ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+					ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+					ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+					from obs o
+					where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+					group by person_id
+				) active_status on active_status.person_id =ec.patient_id
+			where ec.encounter_datetime between startDate and endDate
+			and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
+			 -- and if(datediff(lft.tca, endDate) <= 90, 0,1) = 0
+		) as ActiveInCareTotal,
+		(
+			-- query to get active on ART patients in specified duration
+			select count(distinct ec.patient_id)
+			from encounter ec 
+			join person p on p.person_id = ec.patient_id and p.voided=0 -- and p.dead = 0 -- filter dead
+			join patient_program pp on pp.patient_id = ec.patient_id and pp.voided = 0 and pp.program_id=2
+			left outer join (
+				select person_id, mid(max(concat(tca, visit_date)),11) as visit_date,
+				left(max(concat(tca, visit_date)),10) as tca
+				from (
+				select person_id, date(mid(max(concat(obs_datetime,value_datetime)),20)) as tca,
+				date(left(max(concat(obs_datetime,value_datetime)),19)) as visit_date
+				from obs 
+				where voided =0 and concept_id = 5096
+				group by person_id, date(obs_datetime))x
+			group by person_id 
+			)lft on lft.person_id = ec.patient_id and lft.visit_date<=GREATEST(LAST_DAY((select max(ec.encounter_datetime))),0)
+			left outer join (
+			-- art status
+			select patient_id, min(start_date) as start_date
+			from (
+			select patient_id, group_concat(cn.name) as reg, start_date, discontinued, o.discontinued_reason
+			from orders o
+			join concept_name cn on cn.concept_id=o.concept_id and cn.voided=0 and cn.concept_name_type='SHORT'
+			where o.voided =0
+			group by patient_id, date(start_date)
+			) art
+			group by patient_id
+			) art_status on art_status.patient_id = ec.patient_id
+			left outer join (
+			-- subquery to transfer out and death status
+			select 
+			o.person_id,
+			ifnull(max(if(o.concept_id=1543, o.value_datetime,null)), '') as date_died,
+			ifnull(max(if(o.concept_id=160649, o.value_datetime,null)), '') as to_date,
+			ifnull(max(if(o.concept_id=161555, o.value_coded,null)), '') as dis_reason
+			from obs o
+			where o.concept_id in (1543, 161555, 160649) and o.voided = 0 -- concepts for date_died, date_transferred out and discontinuation reason
+			group by person_id
+			) active_status on active_status.person_id =ec.patient_id
+			where ec.encounter_datetime between startDate and endDate
+			and if(date_died <= endDate,1,0) =0 and if(to_date <= endDate,1,0)=0
+			and if(start_date <= endDate,1,0) =1
+		) as ActiveOnARTTotal
+	from encounter e
+	where voided =0
+	group by year(e.encounter_datetime), month(e.encounter_datetime) 
+	order by year(e.encounter_datetime), month(e.encounter_datetime) 
 ) d
 inner join (
 SELECT date_format(e.encounter_datetime, '%Y-%M') as cohort_month,
